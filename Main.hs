@@ -123,7 +123,7 @@ criterio :: Linha -> Linha -> Ordering
 criterio =
      comparing (Down . pontosLinha)
   <> comparing (Down . vitorias)
-  <> comparing saldo
+  <> comparing (Down . saldo)
   <> comparing (Down . golsPro)
   <> comparing time
 
@@ -141,6 +141,7 @@ maiorGoleada = foldr maior Nothing
 
 -- Media de gols por partida. Nothing se a lista for vazia.
 mediaGols :: [Partida] -> Maybe Double
+mediaGols [] = Nothing
 mediaGols ps = Just (fromIntegral (sum (map gols ps)) / fromIntegral (length ps))
   where
     gols p = golsMandante p + golsVisitante p
