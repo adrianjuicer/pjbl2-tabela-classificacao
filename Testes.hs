@@ -5,13 +5,15 @@
 --
 --   Camada 1  tipos e consultas basicas
 --   Camada 2  classificacao com funcoes de ordem superior
+--   Camada 3  leitura, validacao e saida
 --   Dados     o campeonato de teste, como texto dentro do codigo
---   Main      provisorio, ate a Camada 3 existir
+--   Main      a demonstracao das tres camadas
 -- =====================================================================
 module Main where
 
 import Data.List (sort, sortBy)
 import Data.Ord (comparing, Down (..))
+import Text.Read (readMaybe)
 
 -- =====================================================================
 -- CAMADA 1: TIPOS E DADOS DO CAMPEONATO
@@ -147,6 +149,177 @@ mediaGols ps = Just (fromIntegral (sum (map gols ps)) / fromIntegral (length ps)
     gols p = golsMandante p + golsVisitante p
 
 -- =====================================================================
+-- CAMADA 3: LEITURA, VALIDACAO E SAIDA
+-- =====================================================================
+
+-- Cada erro guarda o numero da linha; TimeRepetidoNaRodada guarda a rodada e o
+-- time. Os cinco primeiros sao os que o enunciado exige ("no minimo"); os dois
+-- ultimos foram acrescentados pelo grupo, porque sem eles uma rodada 0 ou
+-- negativa e um nome de time vazio passavam em silencio.
+data Erro
+  = CamposInvalidos Int
+  | NumeroInvalido Int
+  | PlacarNegativo Int
+  | MesmoTime Int
+  | TimeRepetidoNaRodada Int Time
+  | RodadaInvalida Int
+  | NomeVazio Int
+  deriving (Show, Eq)
+
+-- Quebra o texto em pedacos a cada caractere c.
+-- O foldr anda da direita para a esquerda guardando (pedaco atual, pedacos prontos).
+separar :: Char -> String -> [String]
+separar c texto = atual : prontos
+  where
+    (atual, prontos) = foldr passo ("", []) texto
+    passo x (pedaco, resto)
+      | x == c    = ("", pedaco : resto)
+      | otherwise = (x : pedaco, resto)
+
+-- A linha numero n vira uma partida. O primeiro Left para tudo.
+lerPartida :: Int -> String -> Either Erro Partida
+lerPartida n linha = do
+  (r, casa, gc, gf, fora) <- campos n (separar ';' linha)
+  numeroRodada <- numero n r
+  golsCasa     <- numero n gc
+  golsFora     <- numero n gf
+  validar n (Partida numeroRodada casa golsCasa golsFora fora)
+
+-- A linha precisa ter exatamente 5 campos.
+campos :: Int -> [String] -> Either Erro (String, String, String, String, String)
+campos _ [r, casa, gc, gf, fora] = Right (r, casa, gc, gf, fora)
+campos n _                       = Left (CamposInvalidos n)
+
+-- Texto para numero com readMaybe. Se der Nothing, vira Left.
+numero :: Int -> String -> Either Erro Int
+numero n texto = maybe (Left (NumeroInvalido n)) Right (readMaybe texto)
+
+-- As guardas seguem a ordem dos campos da linha: rodada, nomes, placar.
+validar :: Int -> Partida -> Either Erro Partida
+validar n p
+  | rodada p < 1              = Left (RodadaInvalida n)
+  | mandante p == ""          = Left (NomeVazio n)
+  | visitante p == ""         = Left (NomeVazio n)
+  | golsMandante p < 0        = Left (PlacarNegativo n)
+  | golsVisitante p < 0       = Left (PlacarNegativo n)
+  | mandante p == visitante p = Left (MesmoTime n)
+  | otherwise                 = Right p
+
+-- Numera as linhas e tira as vazias e os comentarios (#).
+linhasNumeradas :: String -> [(Int, String)]
+linhasNumeradas texto = filter (contaComoPartida . snd) (zip [1 ..] (separar '\n' texto))
+
+contaComoPartida :: String -> Bool
+contaComoPartida ""        = False
+contaComoPartida ('#' : _) = False
+contaComoPartida _         = True
+
+-- Le tudo, para no primeiro erro, e depois confere time repetido na rodada.
+lerCampeonato :: String -> Either Erro [Partida]
+lerCampeonato texto = do
+  partidas <- traverse (\(n, linha) -> lerPartida n linha) (linhasNumeradas texto)
+  case repetidos partidas of
+    []         -> Right partidas
+    (erro : _) -> Left erro
+
+-- Um erro para cada time que aparece de novo na mesma rodada.
+repetidos :: [Partida] -> [Erro]
+repetidos ps = snd (foldl verificar ([], []) ps)
+  where
+    verificar (vistos, erros) p =
+      let novos = [(rodada p, mandante p), (rodada p, visitante p)]
+          ja    = filter (\par -> elem par vistos) novos
+      in (vistos ++ novos, erros ++ map (\(r, t) -> TimeRepetidoNaRodada r t) ja)
+
+-- Todos os erros do texto, e nao so o primeiro.
+todosOsErros :: String -> [Erro]
+todosOsErros texto = erros ++ repetidos partidas
+  where
+    leituras          = map (\(n, linha) -> lerPartida n linha) (linhasNumeradas texto)
+    (erros, partidas) = foldr dividir ([], []) leituras
+    dividir (Left e)  (es, ps) = (e : es, ps)
+    dividir (Right p) (es, ps) = (es, p : ps)
+
+-- A maior goleada em texto. Nothing se nao houve partida.
+-- O <$> aplica descrever DENTRO da caixa Maybe, sem tirar o valor dela:
+-- Maybe como functor, que a secao 3.3 do enunciado pede.
+descricaoGoleada :: [Partida] -> Maybe String
+descricaoGoleada ps = descrever <$> maiorGoleada ps
+
+-- Uma partida em uma linha: "Cascavel 0 x 4 Coritiba (rodada 5)".
+descrever :: Partida -> String
+descrever p =
+  mandante p ++ " " ++ show (golsMandante p) ++ " x " ++ show (golsVisitante p)
+    ++ " " ++ visitante p ++ " (rodada " ++ show (rodada p) ++ ")"
+
+-- Tira o texto da caixa; se nao houver nada, devolve o aviso.
+textoOu :: String -> Maybe String -> String
+textoOu aviso Nothing      = aviso
+textoOu _     (Just texto) = texto
+
+-- Enche o texto com espacos a DIREITA ate ter n caracteres.
+-- replicate com numero negativo devolve "", entao nome maior que n nao quebra.
+esquerda :: Int -> String -> String
+esquerda n texto = texto ++ replicate (n - length texto) ' '
+
+-- Enche o texto com espacos a ESQUERDA ate ter n caracteres.
+direita :: Int -> String -> String
+direita n texto = replicate (n - length texto) ' ' ++ texto
+
+-- O saldo sempre com sinal, para a coluna ficar legivel.
+comSinal :: Int -> String
+comSinal n = if n > 0 then '+' : show n else show n
+
+-- Largura da coluna do time: o nome mais comprido, nunca menor que "Time".
+-- foldr com max nao quebra na lista vazia, ao contrario de maximum.
+larguraNome :: [Linha] -> Int
+larguraNome linhas = foldr max 4 (map (length . time) linhas)
+
+-- Aproveitamento com uma casa decimal, SEM printf (que esta fora dos modulos
+-- permitidos pela secao 5) e SEM round: a conta e feita com div e mod sobre os
+-- pontos, entao a casa decimal e truncada, nao arredondada.
+aproveitamentoTexto :: Linha -> String
+aproveitamentoTexto l
+  | jogos l == 0 = "0.0"
+  | otherwise    = show inteiro ++ "." ++ show decimo
+  where
+    disputados = 3 * jogos l
+    inteiro    = (100 * pontosLinha l) `div` disputados
+    decimo     = ((1000 * pontosLinha l) `div` disputados) `mod` 10
+
+-- A tabela pronta para impressao: cabecalho, traco e uma linha por time.
+-- Campeonato vazio devolve texto vazio, em vez de um cabecalho sem tabela.
+tabelaFormatada :: [Linha] -> String
+tabelaFormatada []     = ""
+tabelaFormatada linhas = unlines (cabecalho larg : traco larg : corpo)
+  where
+    larg  = larguraNome linhas
+    corpo = zipWith (formatar larg) [1 ..] linhas
+
+cabecalho :: Int -> String
+cabecalho larg =
+  direita 3 "Pos" ++ "  " ++ esquerda larg "Time"
+    ++ direita 4 "P" ++ direita 4 "J" ++ direita 4 "V" ++ direita 4 "E"
+    ++ direita 4 "D" ++ direita 5 "GP" ++ direita 5 "GC" ++ direita 5 "SG"
+    ++ direita 8 "%"
+
+traco :: Int -> String
+traco larg = replicate (length (cabecalho larg)) '-'
+
+formatar :: Int -> Int -> Linha -> String
+formatar larg posicao l =
+  direita 3 (show posicao) ++ "  " ++ esquerda larg (time l)
+    ++ direita 4 (show (pontosLinha l))
+    ++ direita 4 (show (jogos l))
+    ++ direita 4 (show (vitorias l))
+    ++ direita 4 (show (empates l))
+    ++ direita 4 (show (derrotas l))
+    ++ direita 5 (show (golsPro l))
+    ++ direita 5 (show (golsContra l))
+    ++ direita 5 (comSinal (saldo l))
+    ++ direita 8 (aproveitamentoTexto l ++ "%")
+
+-- =====================================================================
 -- DADOS: o campeonato de teste, como texto dentro do codigo
 -- =====================================================================
 
@@ -201,6 +374,29 @@ dadosCampeonato = unlines
   , "7;Coritiba;0;0;Arapongas"
   , "7;Athletico;1;0;Cianorte"
   , "7;Cascavel;2;1;Azuriz"
+  ]
+
+-- Um erro de cada tipo, com o numero da linha ao lado:
+--   3  NumeroInvalido         "dois" no lugar do placar
+--   4  CamposInvalidos        falta um campo
+--   5  PlacarNegativo         -1 gol
+--   6  MesmoTime              o Azuriz jogando contra o Azuriz
+--   8  RodadaInvalida         rodada 0
+--   9  NomeVazio              mandante sem nome
+--   -  TimeRepetidoNaRodada   a linha 7 poe o Coritiba de novo na rodada 1
+-- As linhas 2 e 7 sao as unicas que viram partida, e e entre elas que aparece
+-- o time repetido na rodada.
+dadosComErros :: String
+dadosComErros = unlines
+  [ "# rodada;mandante;gols mandante;gols visitante;visitante"
+  , "1;Athletico;2;1;Coritiba"
+  , "1;Londrina;dois;0;Cascavel"
+  , "1;Cianorte;1;Azuriz"
+  , "2;Coritiba;-1;0;Londrina"
+  , "2;Azuriz;1;1;Azuriz"
+  , "1;Coritiba;0;0;Cascavel"
+  , "0;Toledo;1;0;Cianorte"
+  , "3;;2;1;Londrina"
   ]
 
 -- =====================================================================
@@ -335,3 +531,50 @@ main = do
   testar "mediaGols do campeonato de teste (91 gols em 28 partidas)"
     (mediaGols partidasDeTeste) (Just 3.25)
   testar "mediaGols []" (mediaGols []) Nothing
+
+  putStrLn "--- Camada 3: leitura, validacao e saida ---"
+  testar "separar quebra nos ponto-e-virgula"
+    (separar ';' "1;Toledo;2;0;Cascavel") ["1", "Toledo", "2", "0", "Cascavel"]
+  testar "separar de texto vazio da uma lista com um pedaco vazio"
+    (separar ';' "") [""]
+  testar "lerCampeonato valido (ignora o comentario e as linhas em branco)"
+    (lerCampeonato dadosCampeonato) (Right partidasDeTeste)
+  testar "lerCampeonato de texto vazio" (lerCampeonato "") (Right [])
+  testar "CamposInvalidos" (lerPartida 4 "1;Cianorte;1;Azuriz") (Left (CamposInvalidos 4))
+  testar "NumeroInvalido" (lerPartida 3 "1;Londrina;dois;0;Cascavel") (Left (NumeroInvalido 3))
+  testar "PlacarNegativo" (lerPartida 5 "2;Coritiba;-1;0;Londrina") (Left (PlacarNegativo 5))
+  testar "MesmoTime" (lerPartida 6 "2;Azuriz;1;1;Azuriz") (Left (MesmoTime 6))
+  testar "TimeRepetidoNaRodada"
+    (lerCampeonato (unlines ["1;Athletico;1;0;Coritiba", "1;Coritiba;2;2;Londrina"]))
+    (Left (TimeRepetidoNaRodada 1 "Coritiba"))
+  testar "RodadaInvalida: rodada 0" (lerPartida 8 "0;Toledo;1;0;Cianorte")
+    (Left (RodadaInvalida 8))
+  testar "RodadaInvalida: rodada negativa" (lerPartida 8 "-5;Toledo;1;0;Cianorte")
+    (Left (RodadaInvalida 8))
+  testar "NomeVazio: mandante sem nome" (lerPartida 9 "3;;2;1;Londrina")
+    (Left (NomeVazio 9))
+  testar "NomeVazio: visitante sem nome" (lerPartida 9 "3;Toledo;2;1;")
+    (Left (NomeVazio 9))
+  testar "lerPartida de uma linha boa" (lerPartida 2 "7;Coritiba;0;0;Arapongas")
+    (Right (Partida 7 "Coritiba" 0 0 "Arapongas"))
+  testar "todosOsErros lista todos os 7, e nao so o primeiro"
+    (todosOsErros dadosComErros)
+    [NumeroInvalido 3, CamposInvalidos 4, PlacarNegativo 5, MesmoTime 6,
+     RodadaInvalida 8, NomeVazio 9, TimeRepetidoNaRodada 1 "Coritiba"]
+  testar "todosOsErros de texto vazio" (todosOsErros "") []
+  testar "tabelaFormatada de tabela vazia" (tabelaFormatada []) ""
+  testar "tabelaFormatada: cabecalho, traco e uma linha por time"
+    (length (filter (/= "") (separar '\n' (tabelaFormatada tabelaFinal))))
+    (2 + length tabelaFinal)
+  testar "tabelaFormatada: nenhuma linha com largura diferente do cabecalho (alinhada)"
+    (filter (/= length (cabecalho (larguraNome tabelaFinal)))
+            (map length (filter (/= "") (separar '\n' (tabelaFormatada tabelaFinal)))))
+    []
+  testar "aproveitamentoTexto trunca em uma casa (76.19... vira 76.1)"
+    (aproveitamentoTexto (Linha "Athletico" 7 5 1 1 17 11)) "76.1"
+  testar "aproveitamentoTexto de quem nao jogou" (aproveitamentoTexto semJogos) "0.0"
+  testar "comSinal poe o + so no saldo positivo"
+    (map comSinal [3, 0, -4]) ["+3", "0", "-4"]
+  testar "descricaoGoleada no campeonato de teste"
+    (descricaoGoleada partidasDeTeste) (Just "Cascavel 0 x 4 Coritiba (rodada 5)")
+  testar "descricaoGoleada de campeonato vazio" (descricaoGoleada []) Nothing

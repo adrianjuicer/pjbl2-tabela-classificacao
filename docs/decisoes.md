@@ -50,3 +50,12 @@
 8 times, 7 rodadas, 28 partidas: turno único completo, conferido à mão. Cobre um 0 x 0, quatro
 vitórias por 3 gols ou mais, desempate pelo saldo e pelos gols pró, um time sem nenhuma vitória e
 uma tabela da rodada 3 diferente da final.
+
+## Limitações conhecidas
+
+- Confronto direto não é critério de desempate: depois dos gols pró decide o nome do time.
+- Espaços contam no nome: `"Coritiba "` e `"Coritiba"` seriam times diferentes.
+- A coluna `%` é truncada, não arredondada. O valor exato aparece nas estatísticas.
+- `TimeRepetidoNaRodada` acusa repetição dentro da mesma rodada, que é o que o enunciado pede, e
+  não o mesmo confronto duas vezes no campeonato.
+- Não há leitura de arquivo: trocar o campeonato é editar `dadosCampeonato` no código.
